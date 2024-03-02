@@ -17,6 +17,9 @@ from settings import DEFAULT_STOP_ID
 class Parser(BaseParser):
 
     def __init__(self, parser_name: str):
+        self.redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
+        self.redis_client.config_set('save', '60 1')
+        self.ttl_seconds = 24 * 60 * 60  # 1 день в секундах
         self.result_data = {
             'name': parser_name,
             'data': []
@@ -40,48 +43,91 @@ class Parser(BaseParser):
             4: "Регулярная оплата"
         }
     def run(self):
+        logger.info('Запустили функцию парсинга(run)')
         for page_num in range(1, 80): # определяем самостоятельно в зависимости от сайта и сколько максимално страниц, предназначен для то что если стоп условие не сработает парсер не ушел в бесконечный парсинг
 
             json_items: tuple = self.get_tender_links_from_page(page_num) # Получаем ссылки на карточки
             for item in json_items:
                 search_dct,card_dct = item # карточки из поиска и сама карточка
                 self.id = search_dct.get('id','')
+                if not self.redis_client.exists(self.id):
+                    # Если ссылка ещё не была обработана, выполняем парсинг и сохраняем результат
+                    logger.info(f'Обрабатываем ссылку https://agregatoreat.ru/purchases/announcement/{self.id}')
 
-                customer,contactperson = self.get_customer_and_contactperson(card_dct)
+                    customer, contactperson = self.get_customer_and_contactperson(card_dct)
 
-                terms_of_payment_part1 = card_dct.get('trade',{}).get('lot',{}).get('paymentDateInDays','')
-                terms_of_payment_part2 = self.payment_condition.get(card_dct.get('trade',{}).get('lot',{}).get('paymentCondition',''),'')
+                    terms_of_payment_part1 = card_dct.get('trade', {}).get('lot', {}).get('paymentDateInDays', '')
+                    terms_of_payment_part2 = self.payment_condition.get(
+                        card_dct.get('trade', {}).get('lot', {}).get('paymentCondition', ''), '')
 
-                procedure_info = self.get_procedureinfo([search_dct.get('trade',{}).get('publishDate',''),
-                                                         search_dct.get('trade',{}).get('applicationFillingStartDate',''),
-                                                         search_dct.get('trade',{}).get('applicationFillingEndDate','')])
+                    procedure_info = self.get_procedureinfo([search_dct.get('trade', {}).get('publishDate', ''),
+                                                             search_dct.get('trade', {}).get(
+                                                                 'applicationFillingStartDate', ''),
+                                                             search_dct.get('trade', {}).get(
+                                                                 'applicationFillingEndDate', '')])
 
-                lots = self.create_lots(addi_info=card_dct.get('lot',{}).get('additionalConditions',''),deli_place=card_dct.get())
+                    lots = self.create_lots(dct=card_dct.get('trade', {}).get('lot', {}))
 
-                documents = card_dct.get('documents')
+                    documents = card_dct.get('documents')
 
-                tender = {
+                    tender = {
                         'purchaseNumber': str(search_dct.get('tradeNumber')),
-                        'procurementStage': 'Подача предложений', # Фиксированное значение т.к. в ссылке везде такое значение
+                        'procurementStage': 'Подача предложений',
+                        # Фиксированное значение т.к. в ссылке везде такое значение
                         'customer': customer,
-                        'contactPerson':contactperson,
-                        'title': card_dct.get('lot',{}).get('subject'),
-                        'purchaseType': self.purchase_type.get(card_dct.get('trade',{}).get('purchaseMethod',''),''),
+                        'contactPerson': contactperson,
+                        'title': card_dct.get('lot', {}).get('subject'),
+                        'purchaseType': self.purchase_type.get(card_dct.get('trade', {}).get('purchaseMethod', ''), ''),
                         'terms_of_payment': f'{terms_of_payment_part1}{terms_of_payment_part2}'.strip(),
                         'price': search_dct.get('price'),
                         'obesp_z': search_dct.get('applicationGuarantee'),
-                         'procedureInfo': procedure_info,
-                        'startDateContract': self.normalize_date(card_dct), # Дата заключения контракта # Используем метод,что бы сделать дату по формату
+                        'procedureInfo': procedure_info,
+                        'startDateContract': self.normalize_date(card_dct),
+                        # Дата заключения контракта # Используем метод,что бы сделать дату по формату
                         'deliveryTerm': self.get_delivery_term(card_dct),
-                        'attachments' : self.get_attachment(card_dct)
-                        }
+                        'attachments': self.get_attachment(card_dct),
+                        'lots': lots
+                    }
 
-                self.result_data['data'].append(tender)
-                if len(self.result_data['data']) > 10:
-                    self.send_to_core(self.result_data)
-                    self.result_data['data'].clear()
-
+                    self.result_data['data'].append(tender)
+                    if len(self.result_data['data']) > 10:
+                        self.send_to_core(self.result_data)
+                        self.result_data['data'].clear()
+                    # Добавляем ID ссылки в Redis для отметки того, что она была обработана
+                    self.redis_client.set(self.id, 1)
+                    self.redis_client.expire(self.id,self.ttl_seconds)
+                else:
+                    logger.info(f'НЕ Обрабатываем ссылку(она уже есть в бд) https://agregatoreat.ru/purchases/announcement/{self.id}')
+        logger.info('Закончили функцию парсинга(run)')
         self.StopId.update_stop_id(self.new_stop_id)
+
+    def create_lots(self, dct: dict) -> list:
+        addt_info = dct.get('additionalConditions', '')
+        try:
+            delivery_infos = dct.get('deliveryInfos', [])[0].get('deliveryAddress', {})
+            region_name = delivery_infos.get('regionName', '')
+            delivery_info = f'{delivery_infos.get("city", "")} {delivery_infos.get("street", "")} {delivery_infos.get("house", "")}'
+        except IndexError:
+            delivery_info = ''
+            region_name = ''
+        lotsitems = []
+        try:
+            ok_lots = dct.get('lotItems', [])
+            for lot in ok_lots:
+                temp_dct = {}
+                temp_dct['name'] = f'{lot.get("eat", {{}}).get("title", "")}. {lot.get("okpd2", {{}}).get("title", "")}'
+                temp_dct['count'] = lot.get('quantity', '')
+                temp_dct['unit'] = lot.get('okei', {}).get('title', '')
+                temp_dct['unit_price'] = lot.get("unitPrice")
+                temp_dct['cost'] = lot.get('sum', '')
+                lotsitems.append(temp_dct)
+        except Exception as ex:
+            pass
+
+        nice_dct = {'lots': [{"region": region_name, "deliveryPlace": delivery_info, "additionalInfo": addt_info,
+                              "lotItems": lotsitems}]}
+
+        return nice_dct
 
     def get_attachments(self,dct: dict) -> list:
         docs = dct.get('trade',{}).get('lot',{}).get('documents',[])
@@ -97,8 +143,17 @@ class Parser(BaseParser):
             return ''
 
     def get_delivery_term(self,dct: dict) -> str:
-        type = dict.get('deliveryType')
-        pass
+        dct = dct.get('trade',{}).get('lots',{})
+        type = dct.get('deliveryType')
+
+        match type:
+            case 1 if dct.get("deliveryPeriod",''):
+                return f"{dct.get('deliveryPeriod','')} рабочих дня от даты заключения контракта"
+            case 2 if dct.get("deliveryDate",''):
+                formated_data = datetime.strptime(dct.get("deliveryDate"), '%Y-%m-%dT%H:%M:%S').strftime('%d.%m.%Y')
+                return formated_data
+            case _:
+                return ''
 
     def create_lots(self,addi_info: str,deli_place: str,reg:str) -> dict:
         pass
