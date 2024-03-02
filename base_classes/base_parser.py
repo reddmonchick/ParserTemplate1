@@ -1,15 +1,7 @@
-import Requests
-from bs4 import BeautifulSoup
+import requests
 
 
 class BaseParser:
-
-    def get_html(self, response):
-        return response.text
-
-    def get_soup(self, html):
-        soup = BeautifulSoup(html, 'lxml')
-        return soup
 
     def get_tender_links_from_page(self, page_num: int) -> tuple:
         headers = {
@@ -112,7 +104,7 @@ class BaseParser:
                     json_items.append(dct,card_response.json())
                 else:
                     break
-            return json_items_
+            return json_items
         else:
             return []
         # собираем все ссылки и возвращаем итерируемый объект, желательно tuple

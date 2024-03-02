@@ -42,17 +42,19 @@ class Parser(BaseParser):
     def run(self):
         for page_num in range(1, 80): # определяем самостоятельно в зависимости от сайта и сколько максимално страниц, предназначен для то что если стоп условие не сработает парсер не ушел в бесконечный парсинг
 
-            json_items: tuple = self.get_tender_links_from_page(page_num) # Получаем ссылка на карточки
+            json_items: tuple = self.get_tender_links_from_page(page_num) # Получаем ссылки на карточки
             for item in json_items:
-                search_dct,card_dct = item # Делаем запрос к карточке товара
-                customer,contactperson = self.get_customer_and_contacterson(card_dct.get('customer',{}))
+                search_dct,card_dct = item # карточки из поиска и сама карточка
+                self.id = search_dct.get('id','')
 
-                terms_of_payment_part1 = card_dct.get('paymentDateInDays')
-                terms_of_payment_part2 = self.payment_condition.get(card_dct.get('paymentCondition',''),'')
+                customer,contactperson = self.get_customer_and_contactperson(card_dct)
 
-                procedure_info = self.get_procedureinfo([search_dct.get('publishDate',''),
-                                                         search_dct.get('applicationFillingStartDate',''),
-                                                         search_dct.get('applicationFillingEndDate','')])
+                terms_of_payment_part1 = card_dct.get('trade',{}).get('lot',{}).get('paymentDateInDays','')
+                terms_of_payment_part2 = self.payment_condition.get(card_dct.get('trade',{}).get('lot',{}).get('paymentCondition',''),'')
+
+                procedure_info = self.get_procedureinfo([search_dct.get('trade',{}).get('publishDate',''),
+                                                         search_dct.get('trade',{}).get('applicationFillingStartDate',''),
+                                                         search_dct.get('trade',{}).get('applicationFillingEndDate','')])
 
                 lots = self.create_lots(addi_info=card_dct.get('lot',{}).get('additionalConditions',''),deli_place=card_dct.get())
 
@@ -63,15 +65,15 @@ class Parser(BaseParser):
                         'procurementStage': 'Подача предложений', # Фиксированное значение т.к. в ссылке везде такое значение
                         'customer': customer,
                         'contactPerson':contactperson,
-                        'title': search_dct.get('lot',{}).get('subject'),
-                        'purchaseType': self.purchase_type.get(search_dct.get('purchaseMethod',''),''),
+                        'title': card_dct.get('lot',{}).get('subject'),
+                        'purchaseType': self.purchase_type.get(card_dct.get('trade',{}).get('purchaseMethod',''),''),
                         'terms_of_payment': f'{terms_of_payment_part1}{terms_of_payment_part2}'.strip(),
                         'price': search_dct.get('price'),
                         'obesp_z': search_dct.get('applicationGuarantee'),
                          'procedureInfo': procedure_info,
-                        'startDateContract': self.normalize_date(search_dct.get('contractSignDate','')), # Дата заключения контракта
-                        'deliveryTerm': self.get_delivery_term(search_dct.get('lot',{}))
-                        #'startDateContract': search_dct.get('contractSignDate'),
+                        'startDateContract': self.normalize_date(card_dct), # Дата заключения контракта # Используем метод,что бы сделать дату по формату
+                        'deliveryTerm': self.get_delivery_term(card_dct),
+                        'attachments' : self.get_attachment(card_dct)
                         }
 
                 self.result_data['data'].append(tender)
@@ -81,12 +83,27 @@ class Parser(BaseParser):
 
         self.StopId.update_stop_id(self.new_stop_id)
 
+    def get_attachments(self,dct: dict) -> list:
+        docs = dct.get('trade',{}).get('lot',{}).get('documents',[])
+        filtered_docs = [{"url": self.create_fileupload_url(item)} for item in docs if item.get('type') == 4] # Фильтруем нужные нам документы
+        return filtered_docs
+
+    def create_fileupload_url(self,dct:dict) -> str:
+        type,id = dct.get('type',''),dct.get('id','')
+        if id and type:
+            doc_url = f'https://tender-api.agregatoreat.ru/api/FileUpload/{self.id}/{type}/{id}'
+            return doc_url
+        else:
+            return ''
+
     def get_delivery_term(self,dct: dict) -> str:
         type = dict.get('deliveryType')
+        pass
 
     def create_lots(self,addi_info: str,deli_place: str,reg:str) -> dict:
         pass
-    def get_customer_and_contacterson(self,dct: dict) -> dict: # Получаем customer и contactPerson
+    def get_customer_and_contactperson(self,dct: dict) -> dict: # Получаем customer и contactPerson
+        dct = dct.get('customer',{})
         customer_ = {}
         contactperson_ = {}
         customer_['fullName'] = dct.get('name','')
@@ -111,7 +128,8 @@ class Parser(BaseParser):
         proced_info['endDate'] = lst[2]
         return proced_info
 
-    def normalize_date(self,original_date: str)-> str:
+    def normalize_date(self,dct:dict)-> str:
+        original_date = dct.get('trade', {}).get('lot', {}).get('contractSignDate', '')
         if not original_date:
             return ''
         else:
@@ -119,11 +137,6 @@ class Parser(BaseParser):
             # Форматирование даты и времени в нужный формат
             formatted_date = original_date.strftime("%H:%M:%S %d.%m.%Y")
             return formatted_date
-
-
-
-    def documents_create(self,dct) -> dct:
-        pass
 
 
 if __name__=="__main__":
