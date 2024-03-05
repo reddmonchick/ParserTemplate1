@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-PRODUCTION = False
+PRODUCTION = True
 if PRODUCTION:
     current_dir = os.path.dirname(os.path.realpath(__file__))
     base_path = os.path.dirname(current_dir)

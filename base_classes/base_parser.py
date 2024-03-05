@@ -1,5 +1,6 @@
 import requests
-
+from playwright.sync_api import sync_playwright
+from playwright_stealth import stealth_sync
 
 class BaseParser:
 
@@ -89,7 +90,24 @@ class BaseParser:
                 },
             ],
         }
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=False)
+            context = browser.new_context()
+            page = context.new_page()
+            stealth_sync(page)
+            page.goto('https://www.coingecko.com/')
+            time.sleep(3)
+            cookies = page.context.cookies()
+            browser.close()
+        def cookies_to_dict(cookies):
+            cookies_dict = {}
+            for cookie in cookies:
+                cookies_dict[cookie["name"]] = cookie["value"]
+            return cookies_dict
 
+
+        cookies = cookies_to_dict(cookies)
+        print(cookies)
 
         json_data['page'] = page_num
         url = 'https://tender-cache-api.agregatoreat.ru/api/TradeLot/list-published-trade-lots'

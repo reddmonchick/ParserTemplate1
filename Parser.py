@@ -6,17 +6,22 @@ from playwright_stealth import stealth_sync
 import time
 from datetime import datetime
 from base_classes.Requests import Requests
-from base_classes.Send_data import send_to_core
+#from base_classes.Send_data import send_to_core
 from base_classes.base_parser import BaseParser
 from base_classes.chrome_driver import ChromeDriver
 from base_classes.firefox_driver import FirefoxDriver
 from base_classes.stop_id_manipulate import StopId
 from settings import DEFAULT_STOP_ID
-
+from dotenv import load_dotenv
+import os
+import redis
 
 class Parser(BaseParser):
 
     def __init__(self, parser_name: str):
+        load_dotenv()
+        self.core_url = os.getenv("VALIDATOR_URL")
+
         self.redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
         self.redis_client.config_set('save', '60 1')
         self.ttl_seconds = 24 * 60 * 60  # 1 день в секундах
@@ -90,9 +95,8 @@ class Parser(BaseParser):
                     }
 
                     self.result_data['data'].append(tender)
-                    if len(self.result_data['data']) > 10:
-                        self.send_to_core(self.result_data)
-                        self.result_data['data'].clear()
+                    self.send_to_core(self.result_data)
+                    self.result_data['data'].clear()
                     # Добавляем ID ссылки в Redis для отметки того, что она была обработана
                     self.redis_client.set(self.id, 1)
                     self.redis_client.expire(self.id,self.ttl_seconds)
@@ -100,6 +104,18 @@ class Parser(BaseParser):
                     logger.info(f'НЕ Обрабатываем ссылку(она уже есть в бд) https://agregatoreat.ru/purchases/announcement/{self.id}')
         logger.info('Закончили функцию парсинга(run)')
         self.StopId.update_stop_id(self.new_stop_id)
+
+    def send_to_core(self,result_data: dict) -> None:
+        json_ = json.dumps(result_data)
+        res = requests.post(
+            url=self.core_url,
+            data=json_,
+            headers={'Content-Type': 'application/json'},
+        )
+        if res.status_code == 200:
+            logger.info("response status 200, success")
+        else:
+            logger.error(f'response status: {res.status_code}')
 
     def create_lots(self, dct: dict) -> list:
         addt_info = dct.get('additionalConditions', '')

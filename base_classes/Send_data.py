@@ -17,7 +17,7 @@ else:
             return result
         return wrap
 
-@magicDB
+
 def send_to_core(result_data: dict) -> dict:
     if isinstance(result_data['data'], list):
         logger.debug(f'send to core input data count: {len(result_data.get("data"))} elements')
