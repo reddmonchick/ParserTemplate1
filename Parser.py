@@ -124,7 +124,7 @@ class Parser(BaseParser):
                         self.send_to_core(self.result_data)
                         self.result_data['data'].clear()
                     # Добавляем ID ссылки в Redis для отметки того, что она была обработана
-                    self.redis_client.set(self.id, 1)
+                    self.redis_client.set(self.id, 1) #lee
                     self.redis_client.expire(self.id, self.ttl_seconds)
                 else:
                     logger.info(
