@@ -21,11 +21,16 @@ class Parser(BaseParser):
 
     def __init__(self, parser_name: str):
         load_dotenv()
+        self.result_data = {
+            'name': parser_name,
+            'data': []
+        }
+
         self.core_url = os.getenv("VALIDATOR_URL")
 
-        #self.redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
-        #self.redis_client.config_set('save', '60 1')
-        #self.ttl_seconds = 24 * 60 * 60  # 1 день в секундах
+        self.redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
+        self.redis_client.config_set('save', '60 1')
+        self.ttl_seconds = 24 * 60 * 60  # 1 день в секундах
         self.result_data = {
             'name': parser_name,
             'data': []
@@ -65,7 +70,16 @@ class Parser(BaseParser):
                     if terms_of_payment_part1 == 'None' or terms_of_payment_part1 is None:
                         terms_of_payment_part1 = ''
                     else:
-                        terms_of_payment_part1 = f'{terms_of_payment_part1} рабочих дней с даты подписания документа о приемке'
+                        type_work = card_dct.get('trade',{}).get('lot',{}).get('isDeliveryDaysWorking',0)
+                        match type_work:
+                            case False:
+                                terms_of_payment_part1 = f'{terms_of_payment_part1} календарных дней с даты подписания документа о приемке'
+                            case True:
+                                terms_of_payment_part1 = f'{terms_of_payment_part1} рабочих дней с даты подписания документа о приемке'
+                            case _:
+                                terms_of_payment_part1 = ''
+
+
                     terms_of_payment_part2 = self.payment_condition.get(
                         card_dct.get('trade', {}).get('lot', {}).get('paymentCondition', ''), '')
                     logger.debug(terms_of_payment_part1,terms_of_payment_part2)
@@ -81,6 +95,9 @@ class Parser(BaseParser):
                     documents = card_dct.get('documents')
 
                     tender = {
+                        'url':f'https://agregatoreat.ru/purchases/announcement/{self.id}',
+                        'fz': '',
+                        'type': 111,
                         'purchaseNumber': str(search_dct.get('tradeNumber')),
                         'procurementStage': 'Подача предложений',
                         # Фиксированное значение т.к. в ссылке везде такое значение
@@ -101,10 +118,14 @@ class Parser(BaseParser):
                     self.tender = tender
                     self.replace_none_with_empty_string(self.tender)
                     logger.debug(f'Отправляем {self.tender}')
-                    self.send_to_core(tender)
+                    self.result_data['data'].append(self.tender)
+
+                    if self.result_data['data']:
+                        self.send_to_core(self.result_data)
+                        self.result_data['data'].clear()
                     # Добавляем ID ссылки в Redis для отметки того, что она была обработана
-                    #self.redis_client.set(self.id, 1)
-                    #self.redis_client.expire(self.id, self.ttl_seconds)
+                    self.redis_client.set(self.id, 1)
+                    self.redis_client.expire(self.id, self.ttl_seconds)
                 else:
                     logger.info(
                         f'НЕ Обрабатываем ссылку(она уже есть в бд) https://agregatoreat.ru/purchases/announcement/{self.id}')
@@ -130,7 +151,7 @@ class Parser(BaseParser):
             data=json_,
             headers={'Content-Type': 'application/json'},
         )
-        if res.status_code == 200:
+        if res.status_code == 200 or res.status_code == 201:
             logger.info("response status 200, success")
         else:
             logger.error(f'response status: {res.status_code}')
@@ -140,12 +161,13 @@ class Parser(BaseParser):
         addt_info = dct.get('additionalConditions', '')
         delivery_info = ''
         region_name = ''
-        if addt_info:
+        try:
             delivery_infos = dct.get('deliveryInfos', [])[0]
-            if delivery_infos:
-                delivery_infos = delivery_infos.get('deliveryAddress', {})
-                region_name = delivery_infos.get('regionName', '')
-                delivery_info = f'{delivery_infos.get("city", "")} {delivery_infos.get("street", "")} {delivery_infos.get("house", "")}'
+            delivery_infos = delivery_infos.get('deliveryAddress', {})
+            region_name = delivery_infos.get('regionName', '')
+            delivery_info = f'{delivery_infos.get("city", "")} {delivery_infos.get("street", "")} {delivery_infos.get("house", "")}'
+        except:
+            pass
 
         lotsitems = []
         try:
@@ -198,10 +220,8 @@ class Parser(BaseParser):
         customer_ = {}
         contactperson_ = {}
         customer_['fullName'] = dct.get('name','')
-        print(customer_,dct.get('name',''))
         customer_['kkp'] = dct.get('kpp','')
         customer_['factAddress'] = dct.get('address','')
-
         fio = dct.get('contactFio', '')
         if fio:
             fio = fio.split()
@@ -224,7 +244,6 @@ class Parser(BaseParser):
                     contactperson_['middleName'] = ''  # middlename
         contactperson_['contactEmail'] = dct.get('contactEmail', '')  # contactemail
         contactperson_['contactPhone'] = dct.get('contactPhone', '')  # contactphone
-        logger.debug(str(customer_))
         return customer_, contactperson_
 
     def get_procedureinfo(self, lst: list) -> dict:

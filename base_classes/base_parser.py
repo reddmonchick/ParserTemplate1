@@ -30,7 +30,7 @@ class BaseParser:
 
         json_data = {
             'page': 1,
-            'size': 10,
+            'size': 100,
             'isReviewAwaiting': False,
             'isCustomerSendingAwaiting': False,
             'isCustomerSigningAwaiting': False,
