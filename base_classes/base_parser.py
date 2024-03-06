@@ -1,6 +1,10 @@
 import requests
 from playwright.sync_api import sync_playwright
 from playwright_stealth import stealth_sync
+from loguru import logger
+import time
+
+
 
 class BaseParser:
 
@@ -26,7 +30,7 @@ class BaseParser:
 
         json_data = {
             'page': 1,
-            'size': 100,
+            'size': 10,
             'isReviewAwaiting': False,
             'isCustomerSendingAwaiting': False,
             'isCustomerSigningAwaiting': False,
@@ -91,11 +95,11 @@ class BaseParser:
             ],
         }
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
+            browser = p.chromium.launch(headless=True)
             context = browser.new_context()
             page = context.new_page()
             stealth_sync(page)
-            page.goto('https://www.coingecko.com/')
+            page.goto('https://agregatoreat.ru/purchases/new')
             time.sleep(3)
             cookies = page.context.cookies()
             browser.close()
@@ -108,20 +112,25 @@ class BaseParser:
 
         cookies = cookies_to_dict(cookies)
         print(cookies)
-
+        c = 0
         json_data['page'] = page_num
         url = 'https://tender-cache-api.agregatoreat.ru/api/TradeLot/list-published-trade-lots'
-        response = requests.post(url=url,headers=headers,json_data=json_data)
+        response = requests.post(url=url,headers=headers,json=json_data)
         if response.status_code == 200:
+            logger.info('Успешно получили 100 карточек')
             json_items = []
-            json_ = response.json()
+            json_ = response.json().get('items')
             for dct in json_:
-                id = dct.get('id')
-                card_response = requests.get('https://tender-cache-api.agregatoreat.ru/api/TradeLot/8b08852e-b904-45c7-8eeb-c1170a2a0dfd',headers=headers) # делаем запрос к карточке товара
+                id_ = dct.get('id')
+                logger.debug(f'Делаем запрос на ссылку https://tender-cache-api.agregatoreat.ru/api/TradeLot/{id_}')
+                card_response = requests.get(f'https://tender-cache-api.agregatoreat.ru/api/TradeLot/{id_}',headers=headers) # делаем запрос к карточке товара
                 if card_response.status_code == 200:
-                    json_items.append(dct,card_response.json())
+                    c += 1
+                    logger.debug(f'Успешно {c}/100')
+                    json_items.append((dct,card_response.json()))
                 else:
                     break
+            logger.debug(f'Отправляем в парсер на обработку кол карточек: {len(json_items)}')
             return json_items
         else:
             return []
